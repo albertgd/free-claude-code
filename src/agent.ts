@@ -358,7 +358,9 @@ export class Agent {
       const msg: string = err.message ?? String(err);
       if (msg.includes('failed_generation') || msg.includes('Failed to call a function')) {
         throw new Error(
-          `The model had trouble with tool calling. Try rephrasing, or switch models with /model deepseek-r1-distill-llama-70b`,
+          `The model failed to generate a valid tool call.\n` +
+          `  Reason: ${msg}\n` +
+          `  Try rephrasing your request, or switch models: /model deepseek-r1-distill-llama-70b`,
         );
       }
       throw new Error(msg);
