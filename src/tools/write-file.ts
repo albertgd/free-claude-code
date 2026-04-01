@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { confirmIfOutside } from '../confirm';
 
 interface WriteFileArgs {
   path: string;
@@ -32,6 +33,9 @@ export const writeFileTool = {
         const filePath = path.isAbsolute(args.path)
           ? args.path
           : path.join(process.cwd(), args.path);
+
+        const allowed = await confirmIfOutside(filePath, `Write to ${args.path}`);
+        if (!allowed) return `Cancelled: user did not confirm write to ${args.path}`;
 
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, args.content, 'utf-8');

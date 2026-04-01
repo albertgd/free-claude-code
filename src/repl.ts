@@ -28,8 +28,10 @@ ${C.bold}Commands:${C.reset}
   /help                  Show this help
   /clear                 Clear conversation history
   /status                Show current provider and model
+  /provider              Show current provider
   /provider <name>       Switch provider (groq, openai, gemini)
-  /model <name>          Switch model for current provider
+  /model                 Show current model
+  /model <name>          Switch model for this session
   exit, quit             Exit fcc
 
 ${C.bold}Providers:${C.reset}
@@ -125,6 +127,13 @@ export async function runREPL(
       return;
     }
 
+    if (line === '/provider') {
+      console.log(`${C.dim}Current provider: ${current.provider}${C.reset}`);
+      console.log(`${C.dim}Available: groq, openai, gemini${C.reset}`);
+      rl.prompt();
+      return;
+    }
+
     if (line.startsWith('/provider ')) {
       const providerName = line.slice('/provider '.length).trim();
       try {
@@ -137,6 +146,12 @@ export async function runREPL(
       } catch (err: any) {
         console.error(`${C.red}${err.message}${C.reset}`);
       }
+      rl.prompt();
+      return;
+    }
+
+    if (line === '/model') {
+      console.log(`${C.dim}Current model: ${current.model}${C.reset}`);
       rl.prompt();
       return;
     }

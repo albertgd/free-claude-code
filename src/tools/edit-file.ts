@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { confirmIfOutside } from '../confirm';
 
 interface EditFileArgs {
   path: string;
@@ -37,6 +38,9 @@ export const editFileTool = {
         const filePath = path.isAbsolute(args.path)
           ? args.path
           : path.join(process.cwd(), args.path);
+
+        const allowed = await confirmIfOutside(filePath, `Edit ${args.path}`);
+        if (!allowed) return `Cancelled: user did not confirm edit to ${args.path}`;
 
         const content = fs.readFileSync(filePath, 'utf-8');
 

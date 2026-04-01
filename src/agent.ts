@@ -12,6 +12,7 @@ const C = {
   dim: '\x1b[2m',
   cyan: '\x1b[36m',
   yellow: '\x1b[33m',
+  green: '\x1b[32m',
 };
 
 function truncate(str: string, n: number): string {
@@ -31,6 +32,10 @@ function formatToolArgs(argsStr: string): string {
   }
 }
 
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
 function buildToolDefs(tools: ReturnType<typeof getTools>): ChatCompletionTool[] {
   return tools.map(t => ({
     type: 'function' as const,
@@ -40,6 +45,12 @@ function buildToolDefs(tools: ReturnType<typeof getTools>): ChatCompletionTool[]
       parameters: t.function.parameters as Record<string, unknown>,
     },
   }));
+}
+
+interface ToolCallAccum {
+  id: string;
+  name: string;
+  args: string;
 }
 
 export class Agent {
@@ -85,75 +96,108 @@ export class Agent {
   async chat(userMessage: string): Promise<void> {
     this.messages.push({ role: 'user', content: userMessage });
 
-    // Build the full message list (system prompt + history) fresh each turn.
-    // We manage this array directly so we have complete control over what
-    // gets sent — no extra fields (like 'parsed') that non-OpenAI providers reject.
     const conversation: ChatCompletionMessageParam[] = [
       { role: 'system', content: getSystemPrompt(process.cwd()) },
       ...this.messages,
     ];
 
     const MAX_ROUNDS = 15;
+    const startTime = Date.now();
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
 
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
-        // Stream the next completion
-        const stream = await this.client.chat.completions.create({
+        const roundStart = Date.now();
+
+        const streamParams: any = {
           model: this.cfg.model,
           messages: conversation,
           tools: this.toolDefs,
           stream: true,
-        });
+          // Request usage stats in the final chunk (supported by Groq & OpenAI)
+          stream_options: { include_usage: true },
+        };
+        const stream = (await this.client.chat.completions.create(streamParams)) as unknown as AsyncIterable<any>;
 
         let content = '';
-        const toolCallMap: Record<
-          number,
-          { id: string; name: string; args: string }
-        > = {};
+        const toolCallMap: Record<number, ToolCallAccum> = {};
         let finishReason = '';
+        let roundPromptTokens = 0;
+        let roundCompletionTokens = 0;
 
         for await (const chunk of stream) {
-          const choice = chunk.choices[0];
+          const choice = chunk.choices?.[0];
+
+          // Final usage chunk (no choices)
+          if (chunk.usage) {
+            roundPromptTokens = chunk.usage.prompt_tokens ?? 0;
+            roundCompletionTokens = chunk.usage.completion_tokens ?? 0;
+            totalPromptTokens += roundPromptTokens;
+            totalCompletionTokens += roundCompletionTokens;
+          }
+
           if (!choice) continue;
 
           const delta = choice.delta;
 
-          // Stream text tokens directly to stdout
-          if (delta.content) {
+          if (delta?.content) {
             content += delta.content;
             process.stdout.write(`${C.cyan}${delta.content}${C.reset}`);
           }
 
-          // Accumulate tool-call deltas (they arrive in fragments)
-          if (delta.tool_calls) {
+          if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
+              // index can be 0 which is falsy — use ?? not ||
               const idx = tc.index ?? 0;
               if (!toolCallMap[idx]) {
                 toolCallMap[idx] = { id: '', name: '', args: '' };
               }
+              // IDs and names only arrive in the first delta for that index
               if (tc.id) toolCallMap[idx].id = tc.id;
-              if (tc.function?.name) toolCallMap[idx].name = tc.function.name;
-              if (tc.function?.arguments)
-                toolCallMap[idx].args += tc.function.arguments;
+              if (tc.function?.name) toolCallMap[idx].name += tc.function.name;
+              if (tc.function?.arguments) toolCallMap[idx].args += tc.function.arguments;
             }
           }
 
           if (choice.finish_reason) finishReason = choice.finish_reason;
         }
 
-        const toolCalls = Object.values(toolCallMap).filter(tc => tc.name);
+        const roundMs = Date.now() - roundStart;
 
-        // No tool calls → final text response, done
+        // Filter to valid, complete tool calls
+        const toolCalls = Object.values(toolCallMap).filter(
+          tc => tc.name && tc.args,
+        );
+
+        // Ensure every tool call has a non-empty ID (some providers omit it)
+        for (let i = 0; i < toolCalls.length; i++) {
+          if (!toolCalls[i].id) {
+            toolCalls[i].id = `call_${Date.now()}_${i}`;
+          }
+        }
+
+        // Print token stats for this round
+        if (roundPromptTokens > 0 || roundCompletionTokens > 0) {
+          const tokStr =
+            roundPromptTokens > 0
+              ? `↑${formatTokens(roundPromptTokens)} ↓${formatTokens(roundCompletionTokens)}`
+              : `↓${formatTokens(roundCompletionTokens)}`;
+          process.stdout.write(
+            `\n${C.dim}[${this.cfg.provider} · ${this.cfg.model} · ${tokStr} tokens · ${roundMs}ms]${C.reset}`,
+          );
+        }
+
+        // No tool calls → final text response
         if (toolCalls.length === 0 || finishReason === 'stop') {
-          if (content) process.stdout.write('\n');
+          process.stdout.write('\n');
           conversation.push({ role: 'assistant', content });
           break;
         }
 
-        // Has tool calls — finish any streamed text first
         if (content) process.stdout.write('\n');
 
-        // Append the assistant message (only standard fields, no 'parsed')
+        // Add assistant message with tool calls (only standard fields)
         conversation.push({
           role: 'assistant',
           content: content || null,
@@ -164,7 +208,7 @@ export class Agent {
           })),
         });
 
-        // Execute each tool and feed results back
+        // Execute tools and add results
         for (const tc of toolCalls) {
           process.stdout.write(
             `\n${C.dim}⚙  ${C.yellow}${tc.name}${C.reset}${C.dim}(${formatToolArgs(tc.args)})${C.reset}\n`,
@@ -172,7 +216,6 @@ export class Agent {
 
           const result = await this.executeTool(tc.name, tc.args);
 
-          // Show a short preview of the result
           const lines = result.split('\n');
           for (const line of lines.slice(0, 8)) {
             process.stdout.write(`${C.dim}   ${line}${C.reset}\n`);
@@ -189,14 +232,29 @@ export class Agent {
             content: result,
           });
         }
-        // Loop back → model sees tool results and continues
       }
 
-      // Persist history (strip system prompt)
+      // Show total if more than one round (i.e. tool calls happened)
+      const totalMs = Date.now() - startTime;
+      const totalTokens = totalPromptTokens + totalCompletionTokens;
+      if (totalTokens > 0) {
+        process.stdout.write(
+          `${C.dim}[total: ${formatTokens(totalPromptTokens + totalCompletionTokens)} tokens · ${totalMs}ms]${C.reset}\n`,
+        );
+      }
+
       this.messages = conversation.slice(1);
     } catch (err: any) {
-      this.messages.pop(); // roll back the user message on failure
-      throw new Error(err.message ?? String(err));
+      this.messages.pop();
+
+      // Groq returns a specific error when tool generation fails
+      const msg: string = err.message ?? String(err);
+      if (msg.includes('failed_generation') || msg.includes('Failed to call a function')) {
+        throw new Error(
+          `The model had trouble with tool calling on this request. Try rephrasing, or switch to a different model with /model deepseek-r1-distill-llama-70b`,
+        );
+      }
+      throw new Error(msg);
     }
   }
 }
