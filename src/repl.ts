@@ -39,6 +39,29 @@ ${C.bold}Providers:${C.reset}
   openai   Paid — GPT-4o via platform.openai.com
   gemini   Free tier — Gemini 2.0 Flash via aistudio.google.com
 
+${C.bold}Groq free-tier models:${C.reset}  (use /model <id> to switch)
+${C.dim}
+  Model ID                                      RPM   RPD     TPM    TPD
+  ─────────────────────────────────────────────────────────────────────────
+  llama-3.3-70b-versatile  ◄ default            30    1K      12K    100K
+  llama-3.1-8b-instant                          30    14.4K    6K    500K
+  meta-llama/llama-4-scout-17b-16e-instruct     30    1K      30K    500K
+  moonshotai/kimi-k2-instruct                   60    1K      10K    300K
+  moonshotai/kimi-k2-instruct-0905              60    1K      10K    300K
+  qwen/qwen3-32b                                60    1K       6K    500K
+  openai/gpt-oss-120b                           30    1K       8K    200K
+  openai/gpt-oss-20b                            30    1K       8K    200K
+  openai/gpt-oss-safeguard-20b                  30    1K       8K    200K
+  allam-2-7b                                    30    7K       6K    500K
+  meta-llama/llama-prompt-guard-2-22m           30    14.4K   15K    500K
+  meta-llama/llama-prompt-guard-2-86m           30    14.4K   15K    500K
+  compound-beta            (no tool calls)       30    250     70K    —
+  compound-beta-mini       (no tool calls)       30    250     70K    —
+  canopylabs/orpheus-arabic-saudi  (audio TTS)  10    100      1.2K   3.6K
+  canopylabs/orpheus-v1-english    (audio TTS)  10    100      1.2K   3.6K
+  ─────────────────────────────────────────────────────────────────────────
+  RPM=requests/min  RPD=requests/day  TPM=tokens/min  TPD=tokens/day${C.reset}
+
 ${C.bold}Tips:${C.reset}
   Set GROQ_API_KEY env var to skip setup
   Use fcc --setup to reconfigure API keys`);
