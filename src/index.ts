@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// Suppress harmless deprecation warnings from transitive deps (e.g. punycode in openai SDK)
+process.removeAllListeners('warning');
+
 import { loadConfig, resolveConfig, runSetup } from './config';
 import { Agent } from './agent';
 import { runREPL } from './repl';

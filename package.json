@@ -28,6 +28,7 @@
       "node22-macos-x64"
     ],
     "outputPath": "binaries",
-    "compress": "GZip"
+    "compress": "GZip",
+    "options": ["no-deprecation"]
   }
 }
