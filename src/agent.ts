@@ -81,9 +81,8 @@ function trimOldestTurn(
 /**
  * Sleep for ms milliseconds, printing a countdown to stderr.
  */
-async function sleepWithCountdown(ms: number, reason: string): Promise<void> {
+async function sleepWithCountdown(ms: number): Promise<void> {
   const secs = Math.ceil(ms / 1000);
-  process.stderr.write(`\n${C.yellow}${reason}${C.reset}\n`);
   for (let i = secs; i > 0; i--) {
     process.stderr.write(`\r${C.dim}Retrying in ${i}s…${C.reset}  `);
     await new Promise(r => setTimeout(r, 1000));
@@ -194,23 +193,21 @@ export class Agent {
         if (status === 429 || msg.includes('rate limit') || msg.includes('Rate limit')) {
           if (rateRetries >= MAX_RATE_RETRIES) {
             throw new Error(
-              `Rate limit hit ${MAX_RATE_RETRIES} times in a row.\n` +
-              `Groq free tier allows ~30 requests/min. Wait a moment and try again,\n` +
-              `or upgrade at https://console.groq.com/settings/billing`,
+              `Still rate limited after waiting. Try again in a moment, or upgrade at https://console.groq.com/settings/billing`,
             );
           }
 
-          // Extract retry-after from header or error message if present
+          // Use retry-after header if provided, otherwise wait 60s (Groq TPM resets per minute)
           const retryAfter =
             err.headers?.['retry-after'] ??
             msg.match(/try again in ([0-9.]+)s/i)?.[1] ??
             null;
-          const waitMs = retryAfter ? Math.ceil(parseFloat(retryAfter) * 1000) : 15000;
+          const waitMs = retryAfter ? Math.ceil(parseFloat(retryAfter) * 1000) : 60_000;
 
-          await sleepWithCountdown(
-            waitMs,
-            `⚠  Rate limited by ${this.cfg.provider} — waiting ${Math.ceil(waitMs / 1000)}s before retrying…`,
+          process.stderr.write(
+            `\n${C.yellow}⚠  Rate limited by ${this.cfg.provider} — waiting ${Math.ceil(waitMs / 1000)}s for the token bucket to reset…${C.reset}\n`,
           );
+          await sleepWithCountdown(waitMs);
           rateRetries++;
           continue;
         }
