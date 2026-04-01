@@ -95,6 +95,7 @@ export class Agent {
   private messages: ChatCompletionMessageParam[] = [];
   private tools: ReturnType<typeof getTools>;
   private toolDefs: ChatCompletionTool[];
+  private toolsDisabled = false; // set when model reports no tool support
 
   constructor(private cfg: ResolvedConfig) {
     this.client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseURL });
@@ -109,6 +110,7 @@ export class Agent {
   switchProvider(cfg: ResolvedConfig): void {
     this.cfg = cfg;
     this.client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseURL });
+    this.toolsDisabled = false; // reset when switching models
   }
 
   private async executeTool(name: string, argsStr: string): Promise<string> {
@@ -149,7 +151,7 @@ export class Agent {
         const streamParams: any = {
           model: this.cfg.model,
           messages: current,
-          tools: this.toolDefs,
+          tools: this.toolsDisabled ? undefined : this.toolDefs,
           stream: true,
           stream_options: { include_usage: true },
         };
@@ -187,6 +189,20 @@ export class Agent {
           current = trimmed;
           trimAttempts++;
           continue;
+        }
+
+        // ── Model doesn't support tool calling ────────────────────────────
+        if (
+          !this.toolsDisabled &&
+          (msg.includes('tool calling') || msg.includes('tool_use') || msg.includes('tools')) &&
+          (status === 400 || msg.toLowerCase().includes('not supported'))
+        ) {
+          this.toolsDisabled = true;
+          process.stderr.write(
+            `\n${C.yellow}⚠  ${this.cfg.model} doesn't support tool calling — running in chat-only mode.${C.reset}\n` +
+            `${C.dim}   File tools (read, write, bash…) won't be available for this model.${C.reset}\n`,
+          );
+          continue; // retry without tools
         }
 
         // ── 429 Rate limited ───────────────────────────────────────────────
