@@ -4,7 +4,7 @@ import { loadConfig, resolveConfig, runSetup } from './config';
 import { Agent } from './agent';
 import { runREPL } from './repl';
 
-const VERSION = '1.0.6';
+const VERSION = '1.0.7';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);

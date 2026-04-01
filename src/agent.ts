@@ -79,15 +79,37 @@ function trimOldestTurn(
 }
 
 /**
- * Sleep for ms milliseconds, printing a countdown to stderr.
+ * Sleep for ms milliseconds with a live countdown.
+ * Ctrl+C (SIGINT) during the wait cancels the retry and exits cleanly.
  */
 async function sleepWithCountdown(ms: number): Promise<void> {
   const secs = Math.ceil(ms / 1000);
-  for (let i = secs; i > 0; i--) {
-    process.stderr.write(`\r${C.dim}Retrying in ${i}s…${C.reset}  `);
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  process.stderr.write(`\r${C.dim}Retrying now…${C.reset}      \n`);
+
+  await new Promise<void>((resolve, reject) => {
+    let remaining = secs;
+
+    const onSigint = () => {
+      clearInterval(timer);
+      process.stderr.write(`\r${C.reset}\n`);
+      process.exit(130); // standard Ctrl+C exit code
+    };
+
+    process.once('SIGINT', onSigint);
+
+    const timer = setInterval(() => {
+      process.stderr.write(`\r${C.dim}Retrying in ${remaining}s… (Ctrl+C to cancel)${C.reset}  `);
+      remaining--;
+      if (remaining < 0) {
+        clearInterval(timer);
+        process.removeListener('SIGINT', onSigint);
+        process.stderr.write(`\r${C.dim}Retrying now…${C.reset}                        \n`);
+        resolve();
+      }
+    }, 1000);
+
+    // Print immediately before the first tick
+    process.stderr.write(`\r${C.dim}Retrying in ${remaining}s… (Ctrl+C to cancel)${C.reset}  `);
+  });
 }
 
 export class Agent {
@@ -213,13 +235,24 @@ export class Agent {
             );
           }
 
-          // Use retry-after header if provided, otherwise wait 60s (Groq TPM resets per minute)
-          const retryAfter =
+          // Use retry-after header if provided, otherwise wait 60s (Groq TPM resets per minute).
+          // Cap at 60s — if the server asks for longer it means a daily/org limit was hit,
+          // which won't recover in a minute anyway so we fail fast with a clear message.
+          const retryAfterRaw =
             err.headers?.['retry-after'] ??
             msg.match(/try again in ([0-9.]+)s/i)?.[1] ??
             null;
-          const waitMs = retryAfter ? Math.ceil(parseFloat(retryAfter) * 1000) : 60_000;
+          const retryAfterSecs = retryAfterRaw ? parseFloat(retryAfterRaw) : 60;
 
+          if (retryAfterSecs > 60) {
+            throw new Error(
+              `Rate limited by ${this.cfg.provider} — server asked to wait ${Math.ceil(retryAfterSecs)}s.\n` +
+              `This usually means you've hit a daily or org-level limit on the free tier.\n` +
+              `Try again later, or upgrade at https://console.groq.com/settings/billing`,
+            );
+          }
+
+          const waitMs = Math.ceil(retryAfterSecs * 1000);
           process.stderr.write(
             `\n${C.yellow}⚠  Rate limited by ${this.cfg.provider} — waiting ${Math.ceil(waitMs / 1000)}s for the token bucket to reset…${C.reset}\n`,
           );
