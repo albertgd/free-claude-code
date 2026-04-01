@@ -64,53 +64,8 @@ jobs:
           SHA256_ARM64: ${{ steps.sha.outputs.arm64 }}
           SHA256_X64: ${{ steps.sha.outputs.x64 }}
         run: |
-          VERSION_NUM="${VERSION#v}"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/albertgd/homebrew-tap.git" tap-repo
-          mkdir -p tap-repo/Formula
-
-          python3 - <<'PYEOF'
-import os
-
-version   = os.environ['VERSION_NUM'] if 'VERSION_NUM' in os.environ else os.environ['VERSION'].lstrip('v')
-tag       = os.environ['VERSION']
-arm64     = os.environ['SHA256_ARM64']
-x64       = os.environ['SHA256_X64']
-
-# #{bin} is Ruby interpolation — use double braces to produce a literal { in the f-string
-formula = f'''class Fcc < Formula
-  desc "Free Claude Code - AI coding assistant using Groq (free), OpenAI, or Gemini"
-  homepage "https://github.com/albertgd/free-claude-code"
-  version "{version}"
-
-  on_macos do
-    on_arm do
-      url "https://github.com/albertgd/free-claude-code/releases/download/{tag}/fcc-macos-arm64"
-      sha256 "{arm64}"
-    end
-    on_intel do
-      url "https://github.com/albertgd/free-claude-code/releases/download/{tag}/fcc-macos-x64"
-      sha256 "{x64}"
-    end
-  end
-
-  def install
-    binary = Hardware::CPU.arm? ? "fcc-macos-arm64" : "fcc-macos-x64"
-    bin.install binary => "fcc"
-    chmod 0755, bin/"fcc"
-  end
-
-  test do
-    assert_match version.to_s, shell_output("#{{bin}}/fcc --version 2>&1")
-  end
-end
-'''
-
-with open('tap-repo/Formula/fcc.rb', 'w') as f:
-    f.write(formula)
-
-print(f'Formula written for v{version}')
-PYEOF
-
+          python3 scripts/update-formula.py
           cd tap-repo
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name  "github-actions[bot]"
