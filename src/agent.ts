@@ -53,6 +53,44 @@ interface ToolCallAccum {
   args: string;
 }
 
+/**
+ * Drop the oldest complete turn (user message + everything up to the next
+ * user message) to reduce context size. Always keeps the system message and
+ * the most recent user message. Returns null if there's nothing left to trim.
+ */
+function trimOldestTurn(
+  conversation: ChatCompletionMessageParam[],
+): ChatCompletionMessageParam[] | null {
+  // conversation[0] is the system message
+  const history = conversation.slice(1);
+
+  // Find indices of user messages in history
+  const userIdxs = history.reduce<number[]>((acc, m, i) => {
+    if (m.role === 'user') acc.push(i);
+    return acc;
+  }, []);
+
+  // Need at least 2 user messages to drop the oldest turn
+  if (userIdxs.length < 2) return null;
+
+  // Drop everything from the first user message up to (not including) the second
+  const trimmed = history.slice(userIdxs[1]);
+  return [conversation[0], ...trimmed];
+}
+
+/**
+ * Sleep for ms milliseconds, printing a countdown to stderr.
+ */
+async function sleepWithCountdown(ms: number, reason: string): Promise<void> {
+  const secs = Math.ceil(ms / 1000);
+  process.stderr.write(`\n${C.yellow}${reason}${C.reset}\n`);
+  for (let i = secs; i > 0; i--) {
+    process.stderr.write(`\r${C.dim}Retrying in ${i}s…${C.reset}  `);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  process.stderr.write(`\r${C.dim}Retrying now…${C.reset}      \n`);
+}
+
 export class Agent {
   private client: OpenAI;
   private messages: ChatCompletionMessageParam[] = [];
@@ -93,10 +131,100 @@ export class Agent {
     }
   }
 
+  /**
+   * Make one streaming API call, handling 413 (context too large) and
+   * 429 (rate limited) with automatic retry/trim before giving up.
+   */
+  private async callWithRetry(
+    conversation: ChatCompletionMessageParam[],
+  ): Promise<{ stream: AsyncIterable<any>; conversation: ChatCompletionMessageParam[] }> {
+    const MAX_TRIM_ATTEMPTS = 5;
+    const MAX_RATE_RETRIES = 3;
+
+    let current = conversation;
+    let trimAttempts = 0;
+    let rateRetries = 0;
+
+    while (true) {
+      try {
+        const streamParams: any = {
+          model: this.cfg.model,
+          messages: current,
+          tools: this.toolDefs,
+          stream: true,
+          stream_options: { include_usage: true },
+        };
+        const stream = (await this.client.chat.completions.create(
+          streamParams,
+        )) as unknown as AsyncIterable<any>;
+        return { stream, conversation: current };
+      } catch (err: any) {
+        const status: number = err.status ?? err.statusCode ?? 0;
+        const msg: string = err.message ?? String(err);
+
+        // ── 413 Context too large ──────────────────────────────────────────
+        if (status === 413 || msg.includes('Request too large')) {
+          if (trimAttempts >= MAX_TRIM_ATTEMPTS) {
+            throw new Error(
+              `Context is too large even after trimming. Use /clear to start a fresh conversation.`,
+            );
+          }
+
+          const trimmed = trimOldestTurn(current);
+          if (!trimmed) {
+            throw new Error(
+              `Your message is too large for the free tier (Groq limit: ~12k tokens/min).\n` +
+              `Try breaking it into smaller requests, or upgrade at https://console.groq.com/settings/billing`,
+            );
+          }
+
+          const dropped = current.length - trimmed.length;
+          process.stderr.write(
+            `\n${C.yellow}⚠  Context too large for ${this.cfg.provider} free tier — ` +
+            `trimming ${dropped} old message(s) and retrying…${C.reset}\n` +
+            `${C.dim}   (Use /clear to start fresh if this keeps happening)${C.reset}\n`,
+          );
+
+          current = trimmed;
+          trimAttempts++;
+          continue;
+        }
+
+        // ── 429 Rate limited ───────────────────────────────────────────────
+        if (status === 429 || msg.includes('rate limit') || msg.includes('Rate limit')) {
+          if (rateRetries >= MAX_RATE_RETRIES) {
+            throw new Error(
+              `Rate limit hit ${MAX_RATE_RETRIES} times in a row.\n` +
+              `Groq free tier allows ~30 requests/min. Wait a moment and try again,\n` +
+              `or upgrade at https://console.groq.com/settings/billing`,
+            );
+          }
+
+          // Extract retry-after from header or error message if present
+          const retryAfter =
+            err.headers?.['retry-after'] ??
+            msg.match(/try again in ([0-9.]+)s/i)?.[1] ??
+            null;
+          const waitMs = retryAfter ? Math.ceil(parseFloat(retryAfter) * 1000) : 15000;
+
+          await sleepWithCountdown(
+            waitMs,
+            `⚠  Rate limited by ${this.cfg.provider} — waiting ${Math.ceil(waitMs / 1000)}s before retrying…`,
+          );
+          rateRetries++;
+          continue;
+        }
+
+        // ── Any other error ────────────────────────────────────────────────
+        throw err;
+      }
+    }
+  }
+
   async chat(userMessage: string): Promise<void> {
     this.messages.push({ role: 'user', content: userMessage });
 
-    const conversation: ChatCompletionMessageParam[] = [
+    let conversation: ChatCompletionMessageParam[] = [
       { role: 'system', content: getSystemPrompt(process.cwd()) },
       ...this.messages,
     ];
@@ -110,15 +238,10 @@ export class Agent {
       for (let round = 0; round < MAX_ROUNDS; round++) {
         const roundStart = Date.now();
 
-        const streamParams: any = {
-          model: this.cfg.model,
-          messages: conversation,
-          tools: this.toolDefs,
-          stream: true,
-          // Request usage stats in the final chunk (supported by Groq & OpenAI)
-          stream_options: { include_usage: true },
-        };
-        const stream = (await this.client.chat.completions.create(streamParams)) as unknown as AsyncIterable<any>;
+        // callWithRetry handles 413/429 transparently
+        const { stream, conversation: trimmedConversation } =
+          await this.callWithRetry(conversation);
+        conversation = trimmedConversation;
 
         let content = '';
         const toolCallMap: Record<number, ToolCallAccum> = {};
@@ -129,7 +252,6 @@ export class Agent {
         for await (const chunk of stream) {
           const choice = chunk.choices?.[0];
 
-          // Final usage chunk (no choices)
           if (chunk.usage) {
             roundPromptTokens = chunk.usage.prompt_tokens ?? 0;
             roundCompletionTokens = chunk.usage.completion_tokens ?? 0;
@@ -148,12 +270,10 @@ export class Agent {
 
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
-              // index can be 0 which is falsy — use ?? not ||
               const idx = tc.index ?? 0;
               if (!toolCallMap[idx]) {
                 toolCallMap[idx] = { id: '', name: '', args: '' };
               }
-              // IDs and names only arrive in the first delta for that index
               if (tc.id) toolCallMap[idx].id = tc.id;
               if (tc.function?.name) toolCallMap[idx].name += tc.function.name;
               if (tc.function?.arguments) toolCallMap[idx].args += tc.function.arguments;
@@ -164,20 +284,12 @@ export class Agent {
         }
 
         const roundMs = Date.now() - roundStart;
+        const toolCalls = Object.values(toolCallMap).filter(tc => tc.name && tc.args);
 
-        // Filter to valid, complete tool calls
-        const toolCalls = Object.values(toolCallMap).filter(
-          tc => tc.name && tc.args,
-        );
-
-        // Ensure every tool call has a non-empty ID (some providers omit it)
         for (let i = 0; i < toolCalls.length; i++) {
-          if (!toolCalls[i].id) {
-            toolCalls[i].id = `call_${Date.now()}_${i}`;
-          }
+          if (!toolCalls[i].id) toolCalls[i].id = `call_${Date.now()}_${i}`;
         }
 
-        // Print token stats for this round
         if (roundPromptTokens > 0 || roundCompletionTokens > 0) {
           const tokStr =
             roundPromptTokens > 0
@@ -188,7 +300,6 @@ export class Agent {
           );
         }
 
-        // No tool calls → final text response
         if (toolCalls.length === 0 || finishReason === 'stop') {
           process.stdout.write('\n');
           conversation.push({ role: 'assistant', content });
@@ -197,7 +308,6 @@ export class Agent {
 
         if (content) process.stdout.write('\n');
 
-        // Add assistant message with tool calls (only standard fields)
         conversation.push({
           role: 'assistant',
           content: content || null,
@@ -208,7 +318,6 @@ export class Agent {
           })),
         });
 
-        // Execute tools and add results
         for (const tc of toolCalls) {
           process.stdout.write(
             `\n${C.dim}⚙  ${C.yellow}${tc.name}${C.reset}${C.dim}(${formatToolArgs(tc.args)})${C.reset}\n`,
@@ -234,7 +343,6 @@ export class Agent {
         }
       }
 
-      // Show total if more than one round (i.e. tool calls happened)
       const totalMs = Date.now() - startTime;
       const totalTokens = totalPromptTokens + totalCompletionTokens;
       if (totalTokens > 0) {
@@ -247,11 +355,10 @@ export class Agent {
     } catch (err: any) {
       this.messages.pop();
 
-      // Groq returns a specific error when tool generation fails
       const msg: string = err.message ?? String(err);
       if (msg.includes('failed_generation') || msg.includes('Failed to call a function')) {
         throw new Error(
-          `The model had trouble with tool calling on this request. Try rephrasing, or switch to a different model with /model deepseek-r1-distill-llama-70b`,
+          `The model had trouble with tool calling. Try rephrasing, or switch models with /model deepseek-r1-distill-llama-70b`,
         );
       }
       throw new Error(msg);
