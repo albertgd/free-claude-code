@@ -1,0 +1,33 @@
+{
+  "name": "fcc",
+  "version": "1.0.0",
+  "description": "Free Claude Code — AI coding assistant using Groq (free), OpenAI, or Gemini",
+  "bin": {
+    "fcc": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "npx ts-node --esm src/index.ts",
+    "package": "npm run build && node scripts/package.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@yao-pkg/pkg": "^6.14.2",
+    "typescript": "^5.0.0"
+  },
+  "pkg": {
+    "targets": [
+      "node22-macos-arm64",
+      "node22-macos-x64"
+    ],
+    "outputPath": "binaries",
+    "compress": "GZip"
+  }
+}

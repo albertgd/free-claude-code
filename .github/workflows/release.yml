@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Build macOS binaries
+        run: |
+          npx @yao-pkg/pkg dist/index.js \
+            --targets node22-macos-arm64,node22-macos-x64 \
+            --out-path binaries \
+            --compress GZip \
+            --no-bytecode \
+            --public-packages "*"
+
+      - name: Rename and chmod binaries
+        run: |
+          # pkg may output as index-* or fcc-* depending on version
+          [ -f binaries/index-macos-arm64 ] && mv binaries/index-macos-arm64 binaries/fcc-macos-arm64 || true
+          [ -f binaries/index-macos-x64  ] && mv binaries/index-macos-x64  binaries/fcc-macos-x64  || true
+          chmod +x binaries/fcc-macos-arm64 binaries/fcc-macos-x64
+          ls -lh binaries/
+
+      - name: Compute SHA256 checksums
+        id: sha
+        run: |
+          echo "arm64=$(shasum -a 256 binaries/fcc-macos-arm64 | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "x64=$(shasum -a 256 binaries/fcc-macos-x64   | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            binaries/fcc-macos-arm64
+            binaries/fcc-macos-x64
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+          SHA256_ARM64: ${{ steps.sha.outputs.arm64 }}
+          SHA256_X64: ${{ steps.sha.outputs.x64 }}
+        run: |
+          VERSION_NUM="${VERSION#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/albertgd/homebrew-tap.git" tap-repo
+          mkdir -p tap-repo/Formula
+
+          python3 - <<'PYEOF'
+import os
+
+version   = os.environ['VERSION_NUM'] if 'VERSION_NUM' in os.environ else os.environ['VERSION'].lstrip('v')
+tag       = os.environ['VERSION']
+arm64     = os.environ['SHA256_ARM64']
+x64       = os.environ['SHA256_X64']
+
+# #{bin} is Ruby interpolation — use double braces to produce a literal { in the f-string
+formula = f'''class Fcc < Formula
+  desc "Free Claude Code - AI coding assistant using Groq (free), OpenAI, or Gemini"
+  homepage "https://github.com/albertgd/free-claude-code"
+  version "{version}"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/albertgd/free-claude-code/releases/download/{tag}/fcc-macos-arm64"
+      sha256 "{arm64}"
+    end
+    on_intel do
+      url "https://github.com/albertgd/free-claude-code/releases/download/{tag}/fcc-macos-x64"
+      sha256 "{x64}"
+    end
+  end
+
+  def install
+    binary = Hardware::CPU.arm? ? "fcc-macos-arm64" : "fcc-macos-x64"
+    bin.install binary => "fcc"
+    chmod 0755, bin/"fcc"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{{bin}}/fcc --version 2>&1")
+  end
+end
+'''
+
+with open('tap-repo/Formula/fcc.rb', 'w') as f:
+    f.write(formula)
+
+print(f'Formula written for v{version}')
+PYEOF
+
+          cd tap-repo
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git add Formula/fcc.rb
+          git commit -m "fcc ${VERSION}"
+          git push
