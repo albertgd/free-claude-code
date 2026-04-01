@@ -22,13 +22,36 @@ fcc           # start an interactive session
 
 ## Providers
 
-| Provider | Model | Cost | Get a key |
-|----------|-------|------|-----------|
+| Provider | Default model | Cost | Get a key |
+|----------|---------------|------|-----------|
 | **Groq** (default) | `llama-3.3-70b-versatile` | Free tier | [console.groq.com](https://console.groq.com) |
 | OpenAI | `gpt-4o` | Paid | [platform.openai.com](https://platform.openai.com) |
 | Gemini | `gemini-2.0-flash` | Free tier | [aistudio.google.com](https://aistudio.google.com) |
 
 All three use the same OpenAI-compatible API protocol, so switching between them is seamless.
+
+### Groq free-tier models
+
+Use `/model <id>` to switch. Your choice is saved and restored on the next launch.
+
+| Model ID | RPM | RPD | TPM | TPD | Notes |
+|----------|-----|-----|-----|-----|-------|
+| `llama-3.3-70b-versatile` ★ | 30 | 1K | 12K | 100K | default |
+| `llama-3.1-8b-instant` | 30 | 14.4K | 6K | 500K | |
+| `meta-llama/llama-4-scout-17b-16e-instruct` | 30 | 1K | 30K | 500K | |
+| `moonshotai/kimi-k2-instruct` | 60 | 1K | 10K | 300K | |
+| `moonshotai/kimi-k2-instruct-0905` | 60 | 1K | 10K | 300K | |
+| `qwen/qwen3-32b` | 60 | 1K | 6K | 500K | |
+| `openai/gpt-oss-120b` | 30 | 1K | 8K | 200K | |
+| `openai/gpt-oss-20b` | 30 | 1K | 8K | 200K | |
+| `openai/gpt-oss-safeguard-20b` | 30 | 1K | 8K | 200K | |
+| `allam-2-7b` | 30 | 7K | 6K | 500K | |
+| `meta-llama/llama-prompt-guard-2-22m` | 30 | 14.4K | 15K | 500K | |
+| `meta-llama/llama-prompt-guard-2-86m` | 30 | 14.4K | 15K | 500K | |
+| `compound-beta` | 30 | 250 | 70K | — | no tool calls |
+| `compound-beta-mini` | 30 | 250 | 70K | — | no tool calls |
+
+RPM = requests/min · RPD = requests/day · TPM = tokens/min · TPD = tokens/day
 
 ---
 
@@ -103,11 +126,13 @@ cat error.log | fcc "what's wrong here?"
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show available commands |
+| `/help` | Show available commands and Groq model list |
 | `/clear` | Clear conversation history |
 | `/status` | Show current provider and model |
-| `/provider <name>` | Switch provider mid-session |
-| `/model <name>` | Switch model mid-session |
+| `/provider` | Show current provider |
+| `/provider <name>` | Switch provider mid-session (saved to config) |
+| `/model` | Show current model |
+| `/model <name>` | Switch model mid-session (saved to config) |
 | `exit` / `quit` | Exit fcc |
 
 ---
@@ -163,11 +188,13 @@ npm run package
 
 ### Releasing a new version
 
+Tag a version and push — GitHub Actions handles the rest:
+
 ```bash
-make release VERSION=1.1.0
+git tag v1.2.0 && git push origin v1.2.0
 ```
 
-This bumps the version, creates a git tag, pushes it, and triggers the GitHub Actions workflow which:
+The workflow:
 1. Compiles TypeScript
 2. Builds arm64 + x64 binaries with `@yao-pkg/pkg`
 3. Creates a GitHub release with the binaries
