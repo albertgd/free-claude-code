@@ -24,6 +24,7 @@ try {
       'dist/index.js',
       '--targets node22-macos-arm64,node22-macos-x64',
       '--out-path binaries',
+      '--options no-deprecation',
     ].join(' '),
     { cwd: root, stdio: 'inherit' },
   );

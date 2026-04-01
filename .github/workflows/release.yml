@@ -32,7 +32,8 @@ jobs:
         run: |
           npx @yao-pkg/pkg dist/index.js \
             --targets node22-macos-arm64,node22-macos-x64 \
-            --out-path binaries
+            --out-path binaries \
+            --options no-deprecation
 
       - name: Rename and chmod binaries
         run: |

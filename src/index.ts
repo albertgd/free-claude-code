@@ -1,13 +1,10 @@
-#!/usr/bin/env node
-
-// Suppress harmless deprecation warnings from transitive deps (e.g. punycode in openai SDK)
-process.removeAllListeners('warning');
+#!/usr/bin/env -S node --no-deprecation
 
 import { loadConfig, resolveConfig, runSetup } from './config';
 import { Agent } from './agent';
 import { runREPL } from './repl';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);

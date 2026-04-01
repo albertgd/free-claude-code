@@ -1,6 +1,6 @@
 {
   "name": "fcc",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Free Claude Code — AI coding assistant using Groq (free), OpenAI, or Gemini",
   "bin": {
     "fcc": "./dist/index.js"
@@ -29,6 +29,6 @@
     ],
     "outputPath": "binaries",
     "compress": "GZip",
-    "options": ["no-deprecation"]
+    "options": "no-deprecation"
   }
 }
