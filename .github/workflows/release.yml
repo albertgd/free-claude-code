@@ -37,11 +37,19 @@ jobs:
 
       - name: Rename and chmod binaries
         run: |
-          # pkg may output as index-* or fcc-* depending on version
-          [ -f binaries/index-macos-arm64 ] && mv binaries/index-macos-arm64 binaries/fcc-macos-arm64 || true
-          [ -f binaries/index-macos-x64  ] && mv binaries/index-macos-x64  binaries/fcc-macos-x64  || true
-          chmod +x binaries/fcc-macos-arm64 binaries/fcc-macos-x64
+          echo "=== binaries/ contents ==="
           ls -lh binaries/
+          # pkg names output after the input file (index) or the package name
+          # Try all known naming patterns
+          for src in binaries/index-macos-arm64 binaries/dist-macos-arm64; do
+            [ -f "$src" ] && mv "$src" binaries/fcc-macos-arm64 && break || true
+          done
+          for src in binaries/index-macos-x64 binaries/dist-macos-x64; do
+            [ -f "$src" ] && mv "$src" binaries/fcc-macos-x64 && break || true
+          done
+          echo "=== after rename ==="
+          ls -lh binaries/
+          chmod +x binaries/fcc-macos-arm64 binaries/fcc-macos-x64
 
       - name: Compute SHA256 checksums
         id: sha
