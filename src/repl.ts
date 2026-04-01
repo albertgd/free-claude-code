@@ -2,7 +2,7 @@ import readline from 'readline';
 import fs from 'fs';
 import { Agent } from './agent';
 import type { Config, ResolvedConfig } from './config';
-import { resolveConfig, getHistoryFile } from './config';
+import { resolveConfig, saveConfig, getHistoryFile } from './config';
 
 const C = {
   reset: '\x1b[0m',
@@ -163,6 +163,8 @@ export async function runREPL(
         const newResolved = resolveConfig(config, providerName);
         agent.switchProvider(newResolved);
         current = newResolved;
+        config.provider = providerName;
+        saveConfig(config);
         console.log(
           `${C.dim}Switched to ${providerName} (${newResolved.model})${C.reset}`,
         );
@@ -183,6 +185,10 @@ export async function runREPL(
       const modelName = line.slice('/model '.length).trim();
       current = { ...current, model: modelName };
       agent.switchProvider(current);
+      if (config.providers[current.provider]) {
+        config.providers[current.provider]!.model = modelName;
+        saveConfig(config);
+      }
       console.log(`${C.dim}Model set to ${modelName}${C.reset}`);
       rl.prompt();
       return;
