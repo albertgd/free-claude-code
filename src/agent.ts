@@ -129,6 +129,56 @@ export class Agent {
     this.messages = [];
   }
 
+  getMessageCount(): number {
+    return this.messages.length;
+  }
+
+  getHistory(): ChatCompletionMessageParam[] {
+    return [...this.messages];
+  }
+
+  getLastUserMessage(): string | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      if (msg.role === 'user' && typeof msg.content === 'string') return msg.content;
+    }
+    return null;
+  }
+
+  getLastAssistantMessage(): string | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content)
+        return msg.content;
+    }
+    return null;
+  }
+
+  /** Keep only the last `keepTurns` user-assistant pairs. */
+  compact(keepTurns = 2): number {
+    const userIdxs: number[] = [];
+    for (let i = 0; i < this.messages.length; i++) {
+      if (this.messages[i].role === 'user') userIdxs.push(i);
+    }
+    if (userIdxs.length <= keepTurns) return 0;
+    const keepFrom = userIdxs[userIdxs.length - keepTurns];
+    const dropped = keepFrom;
+    this.messages = this.messages.slice(keepFrom);
+    return dropped;
+  }
+
+  /** Remove last user message (and everything after) so it can be retried. Returns the removed message. */
+  retryLast(): string | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].role === 'user' && typeof this.messages[i].content === 'string') {
+        const last = this.messages[i].content as string;
+        this.messages = this.messages.slice(0, i);
+        return last;
+      }
+    }
+    return null;
+  }
+
   switchProvider(cfg: ResolvedConfig): void {
     this.cfg = cfg;
     this.client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseURL });
